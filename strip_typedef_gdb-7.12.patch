@@ -1,0 +1,37 @@
+--- gdb-7.12/gdb/python/py-type.c	2017-01-31 07:46:46.092958294 +0100
++++ gdb-7.12/gdb/python/py-type.c	2017-01-31 08:06:01.271687139 +0100
+@@ -452,6 +452,8 @@
+ typy_strip_typedefs (PyObject *self, PyObject *args)
+ {
+   struct type *type = ((type_object *) self)->type;
++  struct type *real_type;
++  int level = 0;
+ 
+   TRY
+     {
+@@ -463,7 +465,24 @@
+     }
+   END_CATCH
+ 
+-  return type_to_type_object (type);
++  real_type = check_typedef (type);
++
++  while (TYPE_CODE (real_type) == TYPE_CODE_PTR ||
++        TYPE_CODE (real_type) == TYPE_CODE_TYPEDEF)
++    {
++      if (TYPE_CODE (real_type) == TYPE_CODE_TYPEDEF){
++         real_type = check_typedef (real_type);
++      }
++      else{
++         real_type = TYPE_TARGET_TYPE (real_type);
++         level++;
++      }
++    }
++
++  while (level--)
++    real_type = lookup_pointer_type (real_type);
++
++  return type_to_type_object (real_type);
+ }
+ 
+ /* Strip typedefs and pointers/reference from a type.  Then check that

@@ -1,0 +1,103 @@
+--- gdb-7.12/gdb/gnu-v3-abi.c	2017-02-09 16:16:26.988923760 +0100
++++ gdb-7.12/gdb/gnu-v3-abi.c	2017-02-09 16:25:30.942210619 +0100
+@@ -724,36 +724,59 @@
+   gdbarch = get_type_arch (self_type);
+   vbit = gnuv3_decode_method_ptr (gdbarch, contents, &ptr_value, &adjustment);
+ 
+-  /* First convert THIS to match the containing type of the pointer to
+-     member.  This cast may adjust the value of THIS.  */
+-  *this_p = value_cast (final_type, *this_p);
+-
+-  /* Then apply whatever adjustment is necessary.  This creates a somewhat
+-     strange pointer: it claims to have type FINAL_TYPE, but in fact it
+-     might not be a valid FINAL_TYPE.  For instance, it might be a
+-     base class of FINAL_TYPE.  And if it's not the primary base class,
+-     then printing it out as a FINAL_TYPE object would produce some pretty
+-     garbage.
+-
+-     But we don't really know the type of the first argument in
+-     METHOD_TYPE either, which is why this happens.  We can't
+-     dereference this later as a FINAL_TYPE, but once we arrive in the
+-     called method we'll have debugging information for the type of
+-     "this" - and that'll match the value we produce here.
+-
+-     You can provoke this case by casting a Base::* to a Derived::*, for
+-     instance.  */
+-  *this_p = value_cast (builtin_type (gdbarch)->builtin_data_ptr, *this_p);
+-  *this_p = value_ptradd (*this_p, adjustment);
+-  *this_p = value_cast (final_type, *this_p);
+-
++  if (this_p != NULL)
++    {
++      /* First convert THIS to match the containing type of the pointer to
++         member.  This cast may adjust the value of THIS.  */
++      *this_p = value_cast (final_type, *this_p);
++
++      /* Then apply whatever adjustment is necessary.  This creates a somewhat
++         strange pointer: it claims to have type FINAL_TYPE, but in fact it
++         might not be a valid FINAL_TYPE.  For instance, it might be a
++         base class of FINAL_TYPE.  And if it's not the primary base class,
++         then printing it out as a FINAL_TYPE object would produce some pretty
++         garbage.
++    
++         But we don't really know the type of the first argument in
++         METHOD_TYPE either, which is why this happens.  We can't
++         dereference this later as a FINAL_TYPE, but once we arrive in the
++         called method we'll have debugging information for the type of
++         "this" - and that'll match the value we produce here.
++    
++         You can provoke this case by casting a Base::* to a Derived::*, for
++         instance.  */
++      *this_p = value_cast (builtin_type (gdbarch)->builtin_data_ptr, *this_p);
++      *this_p = value_ptradd (*this_p, adjustment);
++      *this_p = value_cast (final_type, *this_p);
++    }
++    
+   if (vbit)
+     {
+       LONGEST voffset;
+ 
+       voffset = ptr_value / TYPE_LENGTH (vtable_ptrdiff_type (gdbarch));
+-      return gnuv3_get_virtual_fn (gdbarch, value_ind (*this_p),
+-				   method_type, voffset);
++
++      /* If we don't have a "this" object to apply the method pointer to,
++	 then retrieve the value of the virtual method by looking up its
++	 symbolic name within the symbol table.  */
++      if (this_p == NULL)
++	{
++	  const char *physname;
++	  struct symbol *sym;
++
++	  physname = gnuv3_find_method_in (self_type, voffset, adjustment);
++	  if (physname == NULL)
++	    return NULL;
++
++	  sym = lookup_symbol (physname, NULL, VAR_DOMAIN, NULL).symbol;
++	  if (sym == NULL)
++	    return NULL;
++
++	  return value_of_variable (sym, NULL);
++	}
++      else
++        return gnuv3_get_virtual_fn (gdbarch, value_ind (*this_p),
++				     method_type, voffset);
+     }
+   else
+     return value_from_pointer (lookup_pointer_type (method_type), ptr_value);
+--- gdb-7.12/gdb/value.c	2016-10-07 19:09:21.000000000 +0200
++++ gdb-7.12/gdb/value.c	2017-02-09 16:15:08.508738101 +0100
+@@ -2812,6 +2812,13 @@
+   return gdbarch_addr_bits_remove (gdbarch, value_as_long (val));
+ #else
+ 
++  if (TYPE_CODE (value_type (val)) == TYPE_CODE_METHODPTR)
++    {
++      val = cplus_method_ptr_to_value (NULL, val);
++      if (val == NULL)
++	error (_("Method pointer can't be converted to address."));
++    }
++
+   /* There are several targets (IA-64, PowerPC, and others) which
+      don't represent pointers to functions as simply the address of
+      the function's entry point.  For example, on the IA-64, a
